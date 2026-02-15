@@ -7,13 +7,13 @@ import { randomUUID } from "crypto";
 
 export const runtime = "nodejs";
 
-// Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!); // ✅ no apiVersion
+// Stripe (no apiVersion → avoids Vercel TypeScript failure)
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 // Resend
 const resend = new Resend(process.env.RESEND_API_KEY!);
 
-// Supabase (SERVICE ROLE — webhook server only)
+// Supabase (SERVICE ROLE — server only)
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -55,14 +55,13 @@ export async function POST(req: Request) {
   }
 
   try {
-    // Only handle the final checkout completion
+    // Only handle final checkout completion
     if (stripeEvent.type !== "checkout.session.completed") {
       return NextResponse.json({ received: true });
     }
 
     const session = stripeEvent.data.object as Stripe.Checkout.Session;
 
-    // ---- Metadata (from your /api/checkout) ----
     const eventId = session.metadata?.event_id;
     const ticketTypeId = session.metadata?.ticket_type_id;
     const qty = Math.max(1, Math.min(10, Number(session.metadata?.quantity || 1)));
@@ -82,7 +81,19 @@ export async function POST(req: Request) {
       ticketTypeId,
     });
 
-    // ---- Load event + ticket type from DB ----
+    // ---- Idempotency: if already processed, stop ----
+    const { data: existingOrder } = await supabase
+      .from("orders")
+      .select("id")
+      .eq("stripe_session_id", session.id)
+      .maybeSingle();
+
+    if (existingOrder?.id) {
+      console.log("ℹ️ Webhook already processed for session:", session.id);
+      return NextResponse.json({ received: true });
+    }
+
+    // ---- Load event + ticket type ----
     const { data: dbEvent, error: eventErr } = await supabase
       .from("events")
       .select("id,title,venue,address,start_at")
@@ -101,14 +112,13 @@ export async function POST(req: Request) {
 
     const currency = ticketType.currency ?? "EUR";
     const price = ticketType.price_cents ?? 0;
-
-    // ---- Create ORDER row (1 per checkout) ----
     const total = price * qty;
 
+    // ---- Create ORDER row ----
     const { data: order, error: orderErr } = await supabase
       .from("orders")
       .insert({
-        // your schema may also include stripe_payment_intent_id — optional
+        stripe_session_id: session.id,
         stripe_payment_intent_id: session.payment_intent?.toString() || null,
         event_id: eventId,
         buyer_email: buyerEmail,
@@ -126,16 +136,16 @@ export async function POST(req: Request) {
     }
 
     // ---- Create tickets + QR ----
-    const qrAttachments: { filename: string; content: string }[] = [];
+    const qrAttachments: { filename: string; content: string; cid: string }[] = [];
     const ticketBlocks: string[] = [];
 
     for (let i = 0; i < qty; i++) {
       const token = randomUUID();
 
-      // QR as PNG buffer (best for attachments + email compatibility)
+      // QR PNG buffer
       const pngBuffer = await QRCode.toBuffer(token, { width: 320, margin: 1 });
 
-      // Insert ticket (IMPORTANT: includes order_id)
+      // Insert ticket (includes order_id)
       const { error: ticketErr, data: created } = await supabase
         .from("tickets")
         .insert({
@@ -153,24 +163,28 @@ export async function POST(req: Request) {
         throw new Error(ticketErr.message);
       }
 
-      // Attachment as base64
       const base64 = Buffer.from(pngBuffer).toString("base64");
+
+      // Make CID stable + unique
+      const cid = `ticket-${i + 1}@stella-events`;
+
       qrAttachments.push({
         filename: `ticket-${i + 1}.png`,
         content: base64,
+        cid,
       });
 
-      // Inline image using CID reference (Resend supports attachments, Gmail will show nicely)
-      // If your client doesn’t render CID, the attachment still shows.
       ticketBlocks.push(`
         <div style="border:1px solid #e5e7eb;border-radius:14px;padding:14px;margin:14px 0;background:#fff;">
           <div style="font-weight:800;margin-bottom:6px;">
             Ticket ${i + 1} — ${ticketType.name} (${formatEUR(price)})
           </div>
+
           <div style="width:220px;height:220px;border:1px solid #e5e7eb;border-radius:12px;
                       display:flex;align-items:center;justify-content:center;background:#fff;">
-            <img alt="QR Code" src="cid:ticket-${i + 1}.png" style="width:200px;height:200px;"/>
+            <img alt="QR Code" src="cid:${cid}" style="width:200px;height:200px;display:block;" />
           </div>
+
           <div style="margin-top:8px;font-size:12px;color:#6b7280;">
             Ref: ${created?.id || token}
           </div>
@@ -180,17 +194,17 @@ export async function POST(req: Request) {
 
     console.log("✅ Tickets created:", qty);
 
-    // ---- Email HTML (includes MOVIE NAME + details) ----
     const movieTitle = dbEvent.title || "Movie Show";
 
     const html = `
-      <div style="font-family:Inter,system-ui,Arial,sans-serif; background:#0b0b0f; padding:24px;">
+      <div style="font-family:system-ui,Arial,sans-serif; background:#0b0b0f; padding:24px;">
         <div style="max-width:720px;margin:0 auto;background:#ffffff;border-radius:18px;overflow:hidden;">
           <div style="padding:22px 22px 14px;border-bottom:1px solid #eef2f7;">
             <div style="font-size:12px;letter-spacing:1px;color:#6b7280;font-weight:700;">STELLA EVENTS</div>
             <div style="font-size:26px;font-weight:900;margin-top:6px;color:#111827;">
               Your Tickets — ${movieTitle}
             </div>
+
             <div style="margin-top:10px;color:#111827;">
               <div style="font-weight:800;">${movieTitle}</div>
               <div style="color:#6b7280;margin-top:6px;">
@@ -208,7 +222,7 @@ export async function POST(req: Request) {
           <div style="padding:18px 22px;background:#f9fafb;">
             ${ticketBlocks.join("")}
             <div style="margin-top:10px;color:#6b7280;font-size:13px;">
-              If the QR doesn’t display inside the box, use the attached PNG(s) — they’re the same QR codes.
+              If the QR doesn’t display, use the attached PNG(s).
             </div>
           </div>
 
@@ -223,19 +237,16 @@ export async function POST(req: Request) {
       </div>
     `;
 
-    // ---- Send email ----
     const sendRes = await resend.emails.send({
       from: process.env.TICKETS_FROM_EMAIL!,
       to: buyerEmail,
       subject: `🎟️ Your Tickets — ${movieTitle} (Stella Events)`,
       html,
-      attachments: qrAttachments.map((a, idx) => ({
+      attachments: qrAttachments.map((a) => ({
         filename: a.filename,
         content: a.content,
         content_type: "image/png",
-        // Resend supports CID by matching filename for cid refs
-        // cid: "ticket-1.png" etc.
-        cid: a.filename,
+        cid: a.cid,
       })),
     });
 
