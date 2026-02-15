@@ -4,69 +4,90 @@ import { useState } from "react";
 
 export default function CheckInPage() {
   const [token, setToken] = useState("");
-  const [result, setResult] = useState<any>(null);
+  const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function verify() {
+  async function onCheckIn() {
+    setMsg(null);
     setLoading(true);
-    setResult(null);
     try {
       const res = await fetch("/api/checkin", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
+        headers: {
+          "Content-Type": "application/json",
+          // If you set CHECKIN_API_KEY in env, put it here manually for staff device
+          // "x-checkin-key": "YOUR_CHECKIN_KEY",
+        },
+        body: JSON.stringify({ token: token.trim() }),
       });
+
       const data = await res.json();
-      setResult({ status: res.status, ...data });
+      if (!res.ok) throw new Error(data.error || "Failed");
+
+      setMsg(data.message || "Checked in ✅");
     } catch (e: any) {
-      setResult({ status: 500, error: e.message });
+      setMsg(e.message);
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <main style={{ background: "#0b0b0f", color: "white", minHeight: "100vh", padding: 30 }}>
-      <h1 style={{ fontSize: 34, fontWeight: 950, marginBottom: 10 }}>Gate Check-in</h1>
-      <p style={{ opacity: 0.8, marginTop: 0 }}>
-        Paste the token (or use QR scanner app to open URL with token).
-      </p>
+    <main style={{ minHeight: "100vh", background: "#0b0b0f", color: "white", padding: 24 }}>
+      <div style={{ maxWidth: 520, margin: "0 auto" }}>
+        <h1 style={{ fontSize: 34, fontWeight: 950, marginBottom: 8 }}>Gate Check-in</h1>
+        <p style={{ opacity: 0.8, lineHeight: 1.6 }}>
+          Paste the <b>Ref / Token</b> (or scan QR and paste token), then check in.
+        </p>
 
-      <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
-        <input
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder="Ticket token..."
-          style={{
-            width: 420,
-            maxWidth: "100%",
-            padding: 12,
-            borderRadius: 12,
-            border: "1px solid #2b2b33",
-            background: "rgba(255,255,255,0.04)",
-            color: "white",
-          }}
-        />
-        <button
-          onClick={verify}
-          disabled={!token || loading}
-          style={{
-            padding: "12px 16px",
-            borderRadius: 12,
-            border: 0,
-            fontWeight: 900,
-            cursor: "pointer",
-          }}
-        >
-          {loading ? "Checking..." : "Verify & Check-in"}
-        </button>
-      </div>
+        <div style={{ marginTop: 18, display: "grid", gap: 10 }}>
+          <input
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="Paste ticket token (Ref...)"
+            style={{
+              padding: 14,
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,0.18)",
+              background: "rgba(255,255,255,0.04)",
+              color: "white",
+              outline: "none",
+            }}
+          />
 
-      {result && (
-        <div style={{ marginTop: 18, padding: 16, border: "1px solid #2b2b33", borderRadius: 14 }}>
-          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{JSON.stringify(result, null, 2)}</pre>
+          <button
+            onClick={onCheckIn}
+            disabled={loading || !token.trim()}
+            style={{
+              padding: 14,
+              borderRadius: 12,
+              border: "none",
+              fontWeight: 950,
+              cursor: "pointer",
+              background: "white",
+              color: "black",
+              opacity: loading ? 0.7 : 1,
+            }}
+          >
+            {loading ? "Checking..." : "Check In"}
+          </button>
+
+          {msg && (
+            <div
+              style={{
+                marginTop: 6,
+                padding: 12,
+                borderRadius: 12,
+                border: "1px solid rgba(255,255,255,0.18)",
+                background: "rgba(255,255,255,0.03)",
+                opacity: 0.95,
+              }}
+            >
+              {msg}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </main>
   );
 }
