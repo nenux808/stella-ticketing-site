@@ -1,6 +1,14 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import Stripe from "stripe";
 
+function getStripe() {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error("STRIPE_SECRET_KEY is missing");
+  return new Stripe(key); // ✅ no apiVersion
+}
+
+const stripe = getStripe();
 export const runtime = "nodejs";
 
 const supabase = createClient(
