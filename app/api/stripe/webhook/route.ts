@@ -8,11 +8,7 @@ import { randomUUID } from "crypto";
 export const runtime = "nodejs";
 
 // Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  // if TypeScript shows red line here, it’s fine. If you want to silence it:
-  // @ts-ignore
-  apiVersion: "2023-10-16",
-});
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!); // ✅ no apiVersion
 
 // Resend
 const resend = new Resend(process.env.RESEND_API_KEY!);
