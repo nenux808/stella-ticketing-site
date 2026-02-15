@@ -1,14 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import Stripe from "stripe";
 
-function getStripe() {
-  const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) throw new Error("STRIPE_SECRET_KEY is missing");
-  return new Stripe(key); // ✅ no apiVersion
-}
-
-const stripe = getStripe();
 export const runtime = "nodejs";
 
 const supabase = createClient(
@@ -33,7 +25,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid ticket" }, { status: 404 });
   }
 
-  if (ticket.checked_in_at) {
+  if (ticket.checked_in_at || ticket.status === "checked_in") {
     return NextResponse.json({ error: "Already checked in" }, { status: 400 });
   }
 
