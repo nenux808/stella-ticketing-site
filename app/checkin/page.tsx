@@ -1,73 +1,128 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+"use client";
 
-export const runtime = "nodejs";
+import { useState } from "react";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY! // server-only
-);
+export default function CheckinPage() {
+  const [token, setToken] = useState("");
+  const [status, setStatus] = useState<null | "ok" | "used" | "invalid" | "error">(null);
+  const [message, setMessage] = useState<string>("");
 
-export async function POST(req: Request) {
-  try {
-    // Optional protection: require secret key header
-    const key = req.headers.get("x-checkin-key");
-    if (process.env.CHECKIN_API_KEY && key !== process.env.CHECKIN_API_KEY) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  async function handleCheckin() {
+    setStatus(null);
+    setMessage("");
+
+    try {
+      const res = await fetch("/api/checkin", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ token }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setStatus("error");
+        setMessage(data.error || "Server error");
+        return;
+      }
+
+      setStatus(data.status);
+      setMessage(data.message);
+    } catch (e) {
+      setStatus("error");
+      setMessage("Network error");
     }
-
-    const { token } = await req.json();
-    if (!token || typeof token !== "string") {
-      return NextResponse.json({ error: "Missing token" }, { status: 400 });
-    }
-
-    // Find ticket by token
-    const { data: ticket, error: tErr } = await supabase
-      .from("tickets")
-      .select("id,event_id,status,checked_in_at")
-      .eq("token", token)
-      .single();
-
-    if (tErr || !ticket) {
-      return NextResponse.json({ error: "Ticket not found" }, { status: 404 });
-    }
-
-    if (ticket.status !== "active") {
-      return NextResponse.json({ error: `Ticket is ${ticket.status}` }, { status: 400 });
-    }
-
-    if (ticket.checked_in_at) {
-      return NextResponse.json(
-        { ok: true, message: "Already checked in", checked_in_at: ticket.checked_in_at },
-        { status: 200 }
-      );
-    }
-
-    // Mark checked in (ticket)
-    const now = new Date().toISOString();
-    const { error: uErr } = await supabase
-      .from("tickets")
-      .update({ checked_in_at: now })
-      .eq("id", ticket.id);
-
-    if (uErr) {
-      return NextResponse.json({ error: uErr.message }, { status: 500 });
-    }
-
-    // Insert checkins row (optional but recommended)
-    const { error: cErr } = await supabase.from("checkins").insert({
-      event_id: ticket.event_id,
-      ticket_id: ticket.id,
-      checked_in_at: now,
-    });
-
-    if (cErr) {
-      // Not fatal if ticket already updated
-      console.warn("checkins insert failed:", cErr.message);
-    }
-
-    return NextResponse.json({ ok: true, message: "Checked in ✅", checked_in_at: now });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message || "Server error" }, { status: 500 });
   }
+
+  return (
+    <main
+      style={{
+        minHeight: "100vh",
+        background: "#0b0b0f",
+        color: "white",
+        display: "grid",
+        placeItems: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 420,
+          background: "rgba(255,255,255,0.04)",
+          borderRadius: 18,
+          padding: 22,
+          border: "1px solid #23232b",
+        }}
+      >
+        <h1 style={{ fontSize: 22, fontWeight: 900, marginBottom: 10 }}>
+          🎟️ Gate Check-in
+        </h1>
+
+        <p style={{ opacity: 0.75, fontSize: 14 }}>
+          Scan the QR code and paste the token below.
+        </p>
+
+        <input
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder="Paste ticket token"
+          style={{
+            width: "100%",
+            marginTop: 14,
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid #2a2a33",
+            background: "#0f0f14",
+            color: "white",
+            outline: "none",
+          }}
+        />
+
+        <button
+          onClick={handleCheckin}
+          style={{
+            marginTop: 12,
+            width: "100%",
+            padding: 12,
+            borderRadius: 12,
+            border: "none",
+            background: "white",
+            color: "black",
+            fontWeight: 900,
+            cursor: "pointer",
+          }}
+        >
+          Check In
+        </button>
+
+        {status && (
+          <div
+            style={{
+              marginTop: 14,
+              padding: 12,
+              borderRadius: 12,
+              background:
+                status === "ok"
+                  ? "rgba(34,197,94,0.15)"
+                  : status === "used"
+                  ? "rgba(234,179,8,0.15)"
+                  : "rgba(239,68,68,0.15)",
+              border:
+                status === "ok"
+                  ? "1px solid rgba(34,197,94,0.4)"
+                  : status === "used"
+                  ? "1px solid rgba(234,179,8,0.4)"
+                  : "1px solid rgba(239,68,68,0.4)",
+              fontWeight: 700,
+            }}
+          >
+            {message}
+          </div>
+        )}
+      </div>
+    </main>
+  );
 }
