@@ -3,10 +3,18 @@ import Stripe from "stripe";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+export const runtime = "nodejs";
+
+function getStripe() {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error("STRIPE_SECRET_KEY is missing");
+  return new Stripe(key, { apiVersion: "2023-10-16" });
+}
 
 export async function POST(req: Request) {
   try {
+    const stripe = getStripe();
+
     const body = await req.json();
     const { eventId, ticketTypeId, quantity, buyerEmail, buyerName } = body;
 
@@ -16,7 +24,7 @@ export async function POST(req: Request) {
 
     const qty = Math.max(1, Math.min(10, Number(quantity)));
 
-    // Supabase server client
+    // Supabase server client (cookie-based)
     const cookieStore = await cookies();
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -52,13 +60,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Ticket type not found" }, { status: 404 });
     }
 
+    // In production, set NEXT_PUBLIC_APP_URL to your Vercel domain
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       customer_email: buyerEmail,
-
-      // ✅ Keep metadata ONLY here
       metadata: {
         event_id: eventId,
         ticket_type_id: ticketTypeId,
@@ -66,7 +73,6 @@ export async function POST(req: Request) {
         buyer_name: buyerName || "",
         buyer_email: buyerEmail,
       },
-
       line_items: [
         {
           quantity: qty,
@@ -74,12 +80,11 @@ export async function POST(req: Request) {
             currency: (ticketType.currency || "EUR").toLowerCase(),
             unit_amount: ticketType.price_cents,
             product_data: {
-              name: `${event.title} - ${ticketType.name}`,
+              name: `${event.title} — ${ticketType.name}`,
             },
           },
         },
       ],
-
       success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/events/${event.slug}`,
     });
